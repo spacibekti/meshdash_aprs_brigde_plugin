@@ -219,9 +219,8 @@ def test_mesh_node_can_reply_bare_to_first_contact_from_rf(
 ):
     # An RF station messages a registered mesh node first (mesh node has
     # never sent anything yet, so it has no last_correspondent of its
-    # own on record). Its reply, with no "CALLSIGN:" prefix, must still
-    # reach WU2Z -- delivery itself has to seed last_correspondent, not
-    # just outbound sends.
+    # own on record). Its "#r" reply must still reach WU2Z -- delivery
+    # itself has to seed last_correspondent, not just outbound sends.
     notify_calls = []
     rf_to_mesh, mesh_to_rf, conn, sent_rf_frames, _ack_tracker = _make_wired_bridges(
         tmp_path, fake_connection_manager, running_event_loop, notify_calls
@@ -237,7 +236,7 @@ def test_mesh_node_can_reply_bare_to_first_contact_from_rf(
     # sent_rf_frames has that ack in it before the reply we care about.
     assert _wait_until(lambda: len(sent_rf_frames) == 1)
 
-    mesh_to_rf.on_mesh_packet(_dm_packet(SENDER_NODE, "hi back, no callsign needed"))
+    mesh_to_rf.on_mesh_packet(_dm_packet(SENDER_NODE, "#r hi back, no callsign needed"))
     assert _wait_until(lambda: len(sent_rf_frames) == 2)
 
     _port, _cmd, ax25_bytes = kiss.decode_frame(sent_rf_frames[-1])
@@ -270,7 +269,7 @@ def test_all_broadcast_then_reply_narrows_routing_to_the_replying_device(
     assert {s["destinationId"] for s in fake_connection_manager.sent} == {node_a, node_b}
 
     # node_b is the one that replies.
-    mesh_to_rf.on_mesh_packet(_dm_packet(node_b, "here"))
+    mesh_to_rf.on_mesh_packet(_dm_packet(node_b, "#r here"))
     assert _wait_until(lambda: len(sent_rf_frames) == 2)  # ack of the broadcast + this reply
 
     # A follow-up RF message to the callsign, with no "!ALL", now goes

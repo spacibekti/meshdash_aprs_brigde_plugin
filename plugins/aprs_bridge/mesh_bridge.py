@@ -20,9 +20,19 @@ _MAX_ATTRIBUTION_LEN = 30  # cap on the "name: " prefix so it can't crowd out th
 
 class MeshToRfBridge:
     """Mesh -> RF. Handles !register/!unregister DM commands (no RF
-    involved) and forwards CALLSIGN: prefixed (or last-correspondent)
-    DMs out over RF as APRS messages, tracked for ACK/retransmit via
-    ack_tracker.
+    involved) and forwards "CALLSIGN: text" or "#r text" (reply to last
+    correspondent) DMs out over RF as APRS messages, tracked for
+    ACK/retransmit via ack_tracker. A bare DM matching neither form is
+    left completely untouched -- other MeshDash plugins also subscribe to
+    every DM sent to the gateway node (pub/sub fans out to every
+    subscriber; there's no ownership arbitration between plugins), so an
+    unrecognized bare message could just as easily be meant for a
+    different plugin's own command syntax. Confirmed live: auto-forwarding
+    any bare DM to "whoever I last talked to on RF" occasionally hijacked
+    a message meant for another plugin and transmitted it -- content the
+    sender never intended to put on RF at all. Requiring an explicit "#r"
+    removes that ambiguity at the cost of the sender having to type it
+    instead of just replying with bare text.
 
     Compliance model (see CLAUDE.md -- this is the FCC Part 97.115
     third-party-traffic model, not a claim that every mesh sender holds
@@ -138,6 +148,26 @@ class MeshToRfBridge:
                 self._reply(from_id, f"Unregistered {removed}.")
             return
 
+        # Is this DM actually meant for us at all? Other MeshDash plugins
+        # also subscribe to every DM sent to the gateway node (pub/sub
+        # fans a packet out to every subscriber; there's no ownership
+        # arbitration), so a bare, unrecognized DM could just as easily
+        # be meant for a different plugin's own command syntax. Confirmed
+        # live: treating any bare DM as "reply to my last APRS
+        # correspondent" occasionally hijacked a message meant for
+        # another plugin and transmitted it on RF -- content the sender
+        # never intended to send there at all. Only two forms are
+        # unambiguously ours: an explicit "CALLSIGN: text" target, or an
+        # explicit "#r text" request to reply to the last correspondent.
+        # Anything else is left completely alone (no reply either, so we
+        # don't interfere with whatever else is meant to handle it).
+        addressee, message_text = commands.parse_outbound_request(text)
+        is_explicit_reply = False
+        if addressee is None:
+            is_explicit_reply, message_text = commands.parse_reply_prefix(text)
+            if not is_explicit_reply:
+                return
+
         # Third-party relay model: !register'd status still determines
         # identity_key (the stable per-sender string used for
         # rate-limiting and last-correspondent tracking -- a registered
@@ -161,15 +191,14 @@ class MeshToRfBridge:
             self._reply(from_id, "Rate limit exceeded; message not sent. Try again shortly.")
             return
 
-        addressee, message_text = commands.parse_outbound_request(text)
-        if addressee is None:
+        if is_explicit_reply:
             addressee = registry.get_last_correspondent(self._registry_conn, identity_key)
-        if addressee is None:
-            self._reply(
-                from_id,
-                "No recipient given and no prior correspondent. Use 'CALLSIGN: message'.",
-            )
-            return
+            if addressee is None:
+                self._reply(from_id, "No prior correspondent to reply to. Use 'CALLSIGN: message' first.")
+                return
+            if not message_text:
+                self._reply(from_id, "No message text given. Use '#r message text'.")
+                return
 
         self._send_to_rf(from_id, attribution, addressee, message_text)
         registry.set_last_correspondent(self._registry_conn, identity_key, addressee)

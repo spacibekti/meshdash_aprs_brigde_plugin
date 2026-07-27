@@ -24,6 +24,16 @@ _ALL_PREFIX_RE = re.compile(r"^!all\b\s*(.*)$", re.IGNORECASE)
 # with a colon in it" doesn't get misparsed as an addressee.
 _ADDRESSED_RE = re.compile(r"^([A-Za-z0-9-]{1,9}):\s*(.+)$")
 
+# "#r message text" -- explicit "reply to my last RF correspondent". Other
+# MeshDash plugins also subscribe to every DM sent to the gateway node
+# (pub/sub fans out to all subscribers, there's no way to know who a bare
+# message was "meant" for); silently treating any unrecognized bare DM as
+# an outbound APRS request risks transmitting a message that was actually
+# meant for a different plugin. Requiring this explicit marker removes that
+# ambiguity -- a bare DM with neither this nor a "CALLSIGN:" prefix is left
+# untouched instead of being guessed at.
+_REPLY_PREFIX_RE = re.compile(r"^#r\b\s*(.*)$", re.IGNORECASE)
+
 
 class CommandError(Exception):
     """Raised when text looks like a command but is malformed, so the
@@ -74,8 +84,8 @@ def parse_broadcast_prefix(text: str) -> Tuple[bool, str]:
 def parse_outbound_request(text: str) -> Tuple[Optional[str], str]:
     """Splits "CALLSIGN: message text" into (addressee, message). If text
     doesn't start with a valid-looking "CALLSIGN:" prefix, returns
-    (None, text) unchanged -- the caller falls back to the sender's last
-    correspondent."""
+    (None, text) unchanged -- the caller should then check
+    parse_reply_prefix rather than assuming this is meant for us at all."""
     match = _ADDRESSED_RE.match(text.strip())
     if match is None:
         return None, text.strip()
@@ -83,3 +93,14 @@ def parse_outbound_request(text: str) -> Tuple[Optional[str], str]:
     if not is_valid_callsign(candidate):
         return None, text.strip()
     return candidate, match.group(2).strip()
+
+
+def parse_reply_prefix(text: str) -> Tuple[bool, str]:
+    """Detects a leading "#r" token (case-insensitive) requesting a reply
+    to the sender's last RF correspondent. Returns (is_reply,
+    remaining_text) -- remaining_text has the marker stripped so the
+    outgoing APRS message contains only the actual reply."""
+    match = _REPLY_PREFIX_RE.match(text.strip())
+    if match is None:
+        return False, text
+    return True, match.group(1).strip()

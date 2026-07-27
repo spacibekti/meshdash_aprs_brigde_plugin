@@ -47,6 +47,19 @@ mistake here can take down every other plugin too.
   "meshtastic.receive")` first, wrapped in `try/except`, before subscribing —
   otherwise a plugin reload double-registers the callback and every packet
   gets processed twice.
+- **Every DM-consuming plugin sees every DM — pub/sub fans a packet out to
+  every subscriber, and MeshDash has no concept of one plugin "owning" or
+  claiming a message.** If your plugin has any kind of "unrecognized input
+  falls back to some default action" behavior for DMs, that default action
+  will eventually fire on a message that was actually meant for a *different*
+  plugin's own command syntax — confirmed live, this silently misdirected
+  content (in this project's case, transmitting it on RF) that the sender
+  never intended to send there. Only act on a DM your plugin can recognize
+  unambiguously (an explicit prefix/command); leave everything else
+  completely untouched — no action *and* no reply, since even an unsolicited
+  reply can interfere with whatever else was meant to handle it. Don't
+  rate-limit, log-as-consumed, or otherwise treat an unrecognized DM as
+  "yours" in any way before you've confirmed it actually is.
 - **Transmit only via `await connection_manager.sendText(...)`**, and only
   after checking `connection_manager.is_ready.is_set()`. Don't queue sends
   when the connection isn't ready — log and drop (or retry later at a higher

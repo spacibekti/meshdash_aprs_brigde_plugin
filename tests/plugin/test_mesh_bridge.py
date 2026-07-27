@@ -265,14 +265,14 @@ def test_registered_sender_reaches_rf_on_channel_0(tmp_path, fake_connection_man
     assert _wait_until(lambda: len(sent_rf_frames) == 1)
 
 
-def test_last_correspondent_used_when_no_explicit_addressee(
+def test_hash_r_replies_to_last_correspondent(
     tmp_path, fake_connection_manager, running_event_loop
 ):
     bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
     registry.add_registration(conn, "W4BRD-13", "!node0001")
     registry.set_last_correspondent(conn, "W4BRD-13", "WU2Z")
 
-    bridge.on_mesh_packet(_dm_packet("!node0001", "just a reply, no callsign prefix", channel=2))
+    bridge.on_mesh_packet(_dm_packet("!node0001", "#r just a reply, no callsign prefix", channel=2))
 
     assert _wait_until(lambda: len(sent_rf_frames) == 1)
     _parsed, message = _decode_last_rf_frame(sent_rf_frames)
@@ -280,18 +280,63 @@ def test_last_correspondent_used_when_no_explicit_addressee(
     assert message.text == "0001: just a reply, no callsign prefix"
 
 
-def test_no_addressee_and_no_last_correspondent_replies_with_error(
+def test_hash_r_case_insensitive(tmp_path, fake_connection_manager, running_event_loop):
+    bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
+    registry.add_registration(conn, "W4BRD-13", "!node0001")
+    registry.set_last_correspondent(conn, "W4BRD-13", "WU2Z")
+
+    bridge.on_mesh_packet(_dm_packet("!node0001", "#R hello again", channel=2))
+
+    assert _wait_until(lambda: len(sent_rf_frames) == 1)
+    _parsed, message = _decode_last_rf_frame(sent_rf_frames)
+    assert message.addressee == "WU2Z"
+
+
+def test_hash_r_with_no_last_correspondent_replies_with_error(
     tmp_path, fake_connection_manager, running_event_loop
 ):
     bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
     registry.add_registration(conn, "W4BRD-13", "!node0001")
 
-    bridge.on_mesh_packet(_dm_packet("!node0001", "no addressee here", channel=2))
+    bridge.on_mesh_packet(_dm_packet("!node0001", "#r no prior correspondent", channel=2))
 
     time.sleep(0.2)
     assert sent_rf_frames == []
     assert _wait_until(lambda: len(fake_connection_manager.sent) == 1)
-    assert "No recipient" in fake_connection_manager.sent[0]["text"]
+    assert "No prior correspondent" in fake_connection_manager.sent[0]["text"]
+
+
+def test_hash_r_with_no_text_replies_with_error(tmp_path, fake_connection_manager, running_event_loop):
+    bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
+    registry.add_registration(conn, "W4BRD-13", "!node0001")
+    registry.set_last_correspondent(conn, "W4BRD-13", "WU2Z")
+
+    bridge.on_mesh_packet(_dm_packet("!node0001", "#r", channel=2))
+
+    time.sleep(0.2)
+    assert sent_rf_frames == []
+    assert _wait_until(lambda: len(fake_connection_manager.sent) == 1)
+    assert "No message text" in fake_connection_manager.sent[0]["text"]
+
+
+def test_bare_dm_with_no_recognized_form_is_left_untouched(
+    tmp_path, fake_connection_manager, running_event_loop
+):
+    # The actual bug this guards against: other MeshDash plugins also see
+    # every DM sent to the gateway node. A bare message matching neither
+    # "CALLSIGN:" nor "#r" must not be auto-forwarded to RF (it might be
+    # meant for a different plugin entirely) -- and we shouldn't even
+    # reply, since that could itself interfere with whatever else is
+    # meant to handle it.
+    bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
+    registry.add_registration(conn, "W4BRD-13", "!node0001")
+    registry.set_last_correspondent(conn, "W4BRD-13", "WU2Z")
+
+    bridge.on_mesh_packet(_dm_packet("!node0001", "yes", channel=2))
+
+    time.sleep(0.2)
+    assert sent_rf_frames == []
+    assert fake_connection_manager.sent == []
 
 
 def test_sending_updates_last_correspondent(tmp_path, fake_connection_manager, running_event_loop):
@@ -424,3 +469,31 @@ def test_rate_limit_exceeded_drops_send_and_replies(
     # Successful sends generate no mesh reply; only the rate-limit error does.
     assert _wait_until(lambda: len(fake_connection_manager.sent) == 1)
     assert "Rate limit" in fake_connection_manager.sent[-1]["text"]
+
+
+def test_unrecognized_bare_dm_does_not_consume_rate_limit_budget(
+    tmp_path, fake_connection_manager, running_event_loop
+):
+    # A message left untouched because it isn't ours (no "CALLSIGN:", no
+    # "#r") shouldn't cost the sender any of their rate-limit budget --
+    # it was never actually forwarded, so it shouldn't count against a
+    # later genuine request.
+    bridge, conn, sent_rf_frames, _ack_tracker = _make_bridge(
+        tmp_path,
+        fake_connection_manager,
+        running_event_loop,
+        per_callsign_rate_limit_per_min=60.0,
+        per_callsign_rate_limit_burst=1.0,  # exactly one message allowed
+    )
+    registry.add_registration(conn, "W4BRD-13", "!node0001")
+
+    for i in range(5):
+        # Distinct text per attempt -- dedupe would otherwise collapse
+        # identical repeats before they even reach _handle_dm.
+        bridge.on_mesh_packet(_dm_packet("!node0001", f"not meant for us {i}", channel=2))
+    time.sleep(0.2)
+    assert sent_rf_frames == []
+    assert fake_connection_manager.sent == []
+
+    bridge.on_mesh_packet(_dm_packet("!node0001", "WU2Z: real request", channel=2))
+    assert _wait_until(lambda: len(sent_rf_frames) == 1)
