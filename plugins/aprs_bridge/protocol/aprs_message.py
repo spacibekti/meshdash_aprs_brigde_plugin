@@ -65,7 +65,10 @@ def decode_message(info: bytes) -> AprsMessage:
     if len(info) < _ADDRESSEE_WIDTH + 2 or info[_ADDRESSEE_WIDTH + 1 : _ADDRESSEE_WIDTH + 2] != b":":
         raise AprsMessageError("malformed addressee framing (expected ':' at byte 10)")
 
-    addressee = info[1 : _ADDRESSEE_WIDTH + 1].decode("ascii").strip()
+    # Callsigns/addressees are case-insensitive on-air; normalize to upper
+    # at decode time so downstream routing/ack handling is not dependent on
+    # whichever case an originating client happened to use.
+    addressee = info[1 : _ADDRESSEE_WIDTH + 1].decode("ascii").strip().upper()
     # Some radios/software append a trailing CR (occasionally CRLF) to the
     # info field -- confirmed live against a real ack from a station in
     # the wild: ":W4BRD-13 :ack001\r". Not part of the APRS message
@@ -121,7 +124,7 @@ def build_third_party_ack(claimed_source: str, addressee: str, msgno: str, tocal
 def parse_ack(msg: AprsMessage) -> Optional[str]:
     if msg.msgno is not None:
         return None
-    if not msg.text.startswith("ack"):
+    if not msg.text.lower().startswith("ack"):
         return None
     candidate = msg.text[3:]
     if 1 <= len(candidate) <= 5:
