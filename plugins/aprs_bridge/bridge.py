@@ -294,12 +294,16 @@ class RfToMeshBridge:
         for node_id in node_ids:
             recipient_identity = registry.lookup_callsign_for_node(self._registry_conn, node_id) or node_id
             registry.set_last_correspondent(self._registry_conn, recipient_identity, frame.source)
-        asyncio.run_coroutine_threadsafe(self._deliver_to_all(node_ids, mesh_text), self._loop)
+        asyncio.run_coroutine_threadsafe(
+            self._deliver_to_all(node_ids, mesh_text, frame.source, message.addressee), self._loop
+        )
 
         if message.msgno is not None:
             self._send_ack(frame.source, message.msgno, message.addressee)
 
-    async def _deliver_to_all(self, node_ids: List[str], text: str) -> None:
+    async def _deliver_to_all(
+        self, node_ids: List[str], text: str, rf_source: str, addressee: str
+    ) -> None:
         # Delivered one at a time, awaited in sequence with a short gap
         # between each -- not fired concurrently. Confirmed live: firing
         # one run_coroutine_threadsafe per node (independent, unawaited)
@@ -317,20 +321,32 @@ class RfToMeshBridge:
         for i, node_id in enumerate(node_ids):
             if i > 0:
                 await asyncio.sleep(self._cfg.mesh_fanout_delay_sec)
-            await self._deliver(node_id, text)
+            await self._deliver(node_id, text, rf_source, addressee)
 
-    async def _deliver(self, node_id: str, text: str) -> None:
+    async def _deliver(self, node_id: str, text: str, rf_source: str, addressee: str) -> None:
         if not self._cm.is_ready.is_set():
             self._logger.warning("aprs_bridge: connection_manager not ready; dropping message to %s", node_id)
             return
+        channel_index = self._cfg.mesh_channel_index
+        self._logger.info(
+            "aprs_bridge: RF->mesh send callsign=%s source=%s node_id=%s channel=%s text=%r",
+            addressee, rf_source, node_id, channel_index, text,
+        )
         try:
             await self._cm.sendText(
                 text,
                 destinationId=node_id,
-                channelIndex=self._cfg.mesh_channel_index,
+                channelIndex=channel_index,
+            )
+            self._logger.info(
+                "aprs_bridge: RF->mesh sent callsign=%s source=%s node_id=%s channel=%s",
+                addressee, rf_source, node_id, channel_index,
             )
         except Exception:
-            self._logger.exception("aprs_bridge: sendText to %s failed", node_id)
+            self._logger.exception(
+                "aprs_bridge: RF->mesh send failed callsign=%s source=%s node_id=%s channel=%s text=%r",
+                addressee, rf_source, node_id, channel_index, text,
+            )
 
     def _send_ack(self, rf_recipient_callsign: str, msgno: str, original_addressee: str) -> None:
         ack_text = "ack" + msgno

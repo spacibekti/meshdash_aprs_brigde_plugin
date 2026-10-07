@@ -386,19 +386,58 @@ def test_message_without_msgno_does_not_trigger_ack(
 
 
 def test_delivery_skipped_when_connection_manager_not_ready(
-    tmp_path, running_event_loop
+    tmp_path, fake_connection_manager, running_event_loop
 ):
-    from tests.conftest import FakeConnectionManager
-
-    not_ready_cm = FakeConnectionManager(ready=False)
-    bridge, conn, _, _ack_tracker = _make_bridge(tmp_path, not_ready_cm, running_event_loop)
+    fake_connection_manager.is_ready.clear()
+    bridge, conn, _, _ack_tracker = _make_bridge(
+        tmp_path, fake_connection_manager, running_event_loop
+    )
     registry.add_registration(conn, "WU2Z", "!aabbccdd")
 
     frame = _build_rf_frame("WU2Z", "hello")
     bridge.on_ax25_frame(frame)
 
     time.sleep(0.2)
-    assert not_ready_cm.sent == []
+    assert fake_connection_manager.sent == []
+
+
+def test_message_to_registered_callsign_resolves_and_delivers_to_registered_node_id_without_wantack(
+    tmp_path, running_event_loop
+):
+    class NoWantAckConnectionManager:
+        def __init__(self) -> None:
+            import threading
+
+            self.is_ready = threading.Event()
+            self.is_ready.set()
+            self.sent = []
+
+        async def sendText(self, text, destinationId, channelIndex=0):
+            self.sent.append(
+                {
+                    "text": text,
+                    "destinationId": destinationId,
+                    "channelIndex": channelIndex,
+                }
+            )
+
+    cm = NoWantAckConnectionManager()
+    bridge, conn, _sent_rf_frames, _ack_tracker = _make_bridge(
+        tmp_path,
+        cm,
+        running_event_loop,
+        mesh_channel_index=2,
+    )
+    registry.add_registration(conn, "YD1AJQ-7", "!e0beae33")
+
+    frame = _build_rf_frame("YD1AJQ-7", "Hello")
+    bridge.on_ax25_frame(frame)
+
+    assert _wait_until(lambda: len(cm.sent) == 1)
+    sent = cm.sent[0]
+    assert sent["text"] == "N0CALL-10: Hello"
+    assert sent["destinationId"] == "!e0beae33"
+    assert sent["channelIndex"] == 2
 
 
 def test_non_message_ax25_frame_is_ignored(
@@ -757,4 +796,3 @@ def test_short_name_match_takes_priority_over_node_id_code(
 
     assert _wait_until(lambda: len(fake_connection_manager.sent) == 1)
     assert fake_connection_manager.sent[0]["destinationId"] == "!11ccdd22"  # short-name match wins
-
