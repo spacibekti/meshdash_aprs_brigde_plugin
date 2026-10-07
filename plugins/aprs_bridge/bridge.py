@@ -324,18 +324,10 @@ class RfToMeshBridge:
             self._logger.warning("aprs_bridge: connection_manager not ready; dropping message to %s", node_id)
             return
         try:
-            # wantAck=True requests Meshtastic's own mesh-level delivery
-            # confirmation and retry, not just our RF-side ack/retry --
-            # confirmed live that a plain fire-and-forget send can
-            # silently never reach a node (e.g. one that's briefly
-            # asleep) with nothing in our own logs to show it. This
-            # gives that node's device more than one chance to actually
-            # receive it before we give up.
             await self._cm.sendText(
                 text,
                 destinationId=node_id,
                 channelIndex=self._cfg.mesh_channel_index,
-                wantAck=True,
             )
         except Exception:
             self._logger.exception("aprs_bridge: sendText to %s failed", node_id)

@@ -258,10 +258,41 @@ def test_message_to_registered_callsign_is_delivered_to_mesh(
     assert sent["destinationId"] == "!aabbccdd"
     assert sent["text"] == "N0CALL-10: Testing"
     assert sent["channelIndex"] == 0
-    # Requests Meshtastic's own mesh-level delivery confirmation/retry,
-    # not just our RF-side ack/retry -- a silent single-node delivery
-    # failure was confirmed live with a plain fire-and-forget send.
-    assert sent["wantAck"] is True
+    assert sent["wantAck"] is False
+
+
+def test_message_to_registered_callsign_uses_sendtext_api_without_wantack_kwarg(
+    tmp_path, running_event_loop
+):
+    class NoWantAckConnectionManager:
+        def __init__(self) -> None:
+            import threading
+
+            self.is_ready = threading.Event()
+            self.is_ready.set()
+            self.sent = []
+
+        async def sendText(self, text, destinationId, channelIndex=0):
+            self.sent.append(
+                {
+                    "text": text,
+                    "destinationId": destinationId,
+                    "channelIndex": channelIndex,
+                }
+            )
+
+    cm = NoWantAckConnectionManager()
+    bridge, conn, _sent_rf_frames, _ack_tracker = _make_bridge(tmp_path, cm, running_event_loop)
+    registry.add_registration(conn, "WU2Z", "!aabbccdd")
+
+    frame = _build_rf_frame("WU2Z", "Testing", msgno="003")
+    bridge.on_ax25_frame(frame)
+
+    assert _wait_until(lambda: len(cm.sent) == 1)
+    sent = cm.sent[0]
+    assert sent["destinationId"] == "!aabbccdd"
+    assert sent["text"] == "N0CALL-10: Testing"
+    assert sent["channelIndex"] == 0
 
 
 def test_delivery_sets_last_correspondent_for_registered_recipient(
@@ -726,5 +757,4 @@ def test_short_name_match_takes_priority_over_node_id_code(
 
     assert _wait_until(lambda: len(fake_connection_manager.sent) == 1)
     assert fake_connection_manager.sent[0]["destinationId"] == "!11ccdd22"  # short-name match wins
-
 
