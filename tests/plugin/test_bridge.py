@@ -599,6 +599,21 @@ def test_ack_addressed_to_gateway_clears_ack_tracker(
     assert fake_connection_manager.sent == []
 
 
+def test_mixed_case_ack_addressed_to_gateway_still_clears_ack_tracker(
+    tmp_path, fake_connection_manager, running_event_loop
+):
+    bridge, conn, _sent, ack_tracker = _make_bridge(tmp_path, fake_connection_manager, running_event_loop)
+    ack_tracker.track("005", "WU2Z", b"some-kiss-frame-bytes", "!node0001")
+    assert ack_tracker.pending_count() == 1
+
+    ack_frame = ax25.build_ui_frame("APZ019", "WU2Z", ["WIDE1-1", "WIDE2-1"], b":w4brd-13 :Ack005")
+    bridge.on_ax25_frame(ack_frame)
+
+    assert ack_tracker.pending_count() == 0
+    time.sleep(0.2)
+    assert fake_connection_manager.sent == []
+
+
 def test_message_addressed_to_gateway_callsign_still_delivers_if_registered(
     tmp_path, fake_connection_manager, running_event_loop
 ):

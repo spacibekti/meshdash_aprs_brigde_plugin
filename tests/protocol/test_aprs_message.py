@@ -97,6 +97,11 @@ def test_parse_ack_on_ack_message():
     assert aprs_message.parse_ack(msg) == "003"
 
 
+def test_parse_ack_accepts_mixed_case_ack_prefix():
+    msg = aprs_message.decode_message(b":W4BRD-13 :Ack005")
+    assert aprs_message.parse_ack(msg) == "005"
+
+
 def test_parse_ack_on_ordinary_message_returns_none():
     msg = aprs_message.decode_message(FIXTURE_INFO)
     assert aprs_message.parse_ack(msg) is None
@@ -141,3 +146,8 @@ def test_decode_message_strips_trailing_crlf_from_ordinary_text():
 def test_decode_message_strips_trailing_cr_after_explicit_msgno():
     msg = aprs_message.decode_message(b":WU2Z     :Testing{003\r")
     assert msg == AprsMessage(addressee="WU2Z", text="Testing", msgno="003")
+
+
+def test_decode_message_normalizes_addressee_to_uppercase():
+    msg = aprs_message.decode_message(b":w4brd-13 :hello")
+    assert msg.addressee == "W4BRD-13"
